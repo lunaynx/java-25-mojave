@@ -26,8 +26,22 @@ Runs on every push, or manually via *Actions → Build → Run workflow* with a 
 `jdk-25.0.X+N` tag (use the `+N` build tag that the `-ga` tag points at, not `-ga` itself).
 
 The workflow builds on `macos-15-intel` with Xcode 16.4, fails if any Mach-O file in the image has
-a minimum OS version other than 10.14, smoke-tests AWT, and uploads the JDK and debug symbol
-bundles as an artifact.
+a minimum OS version other than 10.14, builds an installer, installs it on the runner,
+smoke-tests AWT from the installed JDK, and uploads the JDK and debug symbol bundles and the
+installer as artifacts.
+
+## Installing
+
+Open the `.pkg` from the `-installer` artifact. It installs to
+`/Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk`, replacing an earlier install there.
+The package isn't signed, so Gatekeeper blocks a double-click: right-click it and choose *Open*.
+
+To uninstall:
+
+```sh
+sudo rm -rf /Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk
+sudo pkgutil --forget io.github.lunaynx.openjdk-mojave-25
+```
 
 To update to a new 25u release, change the default tag in `.github/workflows/build.yml`; if a
 patch no longer applies, rebase it on the new tag.

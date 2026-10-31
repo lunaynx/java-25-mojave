@@ -16,6 +16,7 @@ jobs:
       JDK_TAG: ${{ inputs.tag || 'jdk-25.0.5+8' }}
       MACOSX_MIN: '10.14'
       BUILD_DIR: jdk/build/macosx-x86_64-server-release
+      INSTALL_DIR: /Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk
     steps:
       - uses: actions/checkout@v7
 
@@ -55,13 +56,39 @@ jobs:
             exit 1
           fi
 
+      - name: Build installer
+        run: |
+          mkdir "$RUNNER_TEMP/pkgroot"
+          ditto "$BUILD_DIR"/images/jdk-bundle/*.jdk "$RUNNER_TEMP/pkgroot/$(basename "$INSTALL_DIR")"
+          # The bundle ID is shared with other OpenJDK builds; don't let Installer redirect
+          # the install to (or skip it because of) one of them found elsewhere on disk
+          pkgbuild --analyze --root "$RUNNER_TEMP/pkgroot" "$RUNNER_TEMP/component.plist"
+          plutil -replace 0.BundleIsRelocatable -bool false "$RUNNER_TEMP/component.plist"
+          plutil -replace 0.BundleIsVersionChecked -bool false "$RUNNER_TEMP/component.plist"
+          plutil -p "$RUNNER_TEMP/component.plist"
+          mkdir "$RUNNER_TEMP/installer"
+          pkgbuild --root "$RUNNER_TEMP/pkgroot" --component-plist "$RUNNER_TEMP/component.plist" \
+            --install-location "$(dirname "$INSTALL_DIR")" \
+            --identifier io.github.lunaynx.openjdk-mojave-25 --version "${JDK_TAG#jdk-}" \
+            "$RUNNER_TEMP/installer/openjdk-mojave-${JDK_TAG#jdk-}.pkg"
+
+      - name: Install
+        run: |
+          sudo installer -pkg "$RUNNER_TEMP"/installer/*.pkg -target /
+          /usr/libexec/java_home -V
+
       - name: Smoke test
         run: |
           echo 'void main() { IO.println(java.awt.Toolkit.getDefaultToolkit().getScreenSize()); }' > "$RUNNER_TEMP/Smoke.java"
-          "$BUILD_DIR/images/jdk/bin/java" -version
-          "$BUILD_DIR/images/jdk/bin/java" "$RUNNER_TEMP/Smoke.java"
+          "$INSTALL_DIR/Contents/Home/bin/java" -version
+          "$INSTALL_DIR/Contents/Home/bin/java" "$RUNNER_TEMP/Smoke.java"
 
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.JDK_TAG }}-macos-x64
           path: ${{ env.BUILD_DIR }}/bundles/*.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.JDK_TAG }}-macos-x64-installer
+          path: ${{ runner.temp }}/installer/*.pkg
