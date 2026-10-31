@@ -1,0 +1,160 @@
+Fall back to LaunchServices for Desktop open before macOS 10.15
+---
+ .../native/libawt_lwawt/awt/CDesktopPeer.m    | 102 ++++++++----------
+ 1 file changed, 46 insertions(+), 56 deletions(-)
+
+diff --git a/src/java.desktop/macosx/native/libawt_lwawt/awt/CDesktopPeer.m b/src/java.desktop/macosx/native/libawt_lwawt/awt/CDesktopPeer.m
+index faacef5ad..d767c2439 100644
+--- a/src/java.desktop/macosx/native/libawt_lwawt/awt/CDesktopPeer.m
++++ b/src/java.desktop/macosx/native/libawt_lwawt/awt/CDesktopPeer.m
+@@ -29,6 +29,48 @@
+ #import <ApplicationServices/ApplicationServices.h>
+ #import "sun_lwawt_macosx_CDesktopPeer.h"
+ 
++static OSStatus openURLWithApp(NSURL *urlToOpen, NSURL *appURI, BOOL forPrinting)
++{
++    if (@available(macOS 10.15, *)) {
++        __block OSStatus status = noErr;
++
++        // Prepare NSOpenConfig object
++        NSArray<NSURL *> *urls = @[urlToOpen];
++        NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
++        configuration.activates = YES; // To bring app to foreground
++        configuration.promptsUserIfNeeded = YES; // To allow macOS desktop prompts
++        configuration.forPrinting = forPrinting;
++
++        // dispatch semaphores used to wait for the completion handler to update and return status
++        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
++        dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC)); // 1 second timeout
++
++        // Asynchronous call - openURLs:withApplicationAtURL
++        dispatch_retain(semaphore);
++        [[NSWorkspace sharedWorkspace] openURLs:urls
++                                       withApplicationAtURL:appURI
++                                       configuration:configuration
++                                       completionHandler:^(NSRunningApplication *app, NSError *error) {
++            if (error) {
++                status = (OSStatus) error.code;
++            }
++            dispatch_semaphore_signal(semaphore);
++            dispatch_release(semaphore);
++        }];
++
++        dispatch_semaphore_wait(semaphore, timeout);
++        dispatch_release(semaphore);
++        return status;
++    }
++
++    // Pre-10.15 equivalent: still opens with the explicitly chosen app, so the callers' checks hold
++    LSLaunchURLSpec spec = {
++        (CFURLRef) appURI, (CFArrayRef) @[urlToOpen], NULL,
++        kLSLaunchDefaults | (forPrinting ? kLSLaunchAndPrint : 0), NULL
++    };
++    return LSOpenFromURLSpec(&spec, NULL);
++}
++
+ /*
+  * Class:     sun_lwawt_macosx_CDesktopPeer
+  * Method:    _lsOpenURI
+@@ -37,7 +79,7 @@
+ JNIEXPORT jint JNICALL Java_sun_lwawt_macosx_CDesktopPeer__1lsOpenURI
+ (JNIEnv *env, jclass clz, jstring uri, jint action)
+ {
+-    __block OSStatus status = noErr;
++    OSStatus status = noErr;
+ JNI_COCOA_ENTER(env);
+ 
+     NSURL *urlToOpen = [NSURL URLWithString:JavaStringToNSString(env, uri)];
+@@ -59,31 +101,7 @@ JNI_COCOA_ENTER(env);
+         return -1;
+     }
+ 
+-    // Prepare NSOpenConfig object
+-    NSArray<NSURL *> *urls = @[urlToOpen];
+-    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+-    configuration.activates = YES; // To bring app to foreground
+-    configuration.promptsUserIfNeeded = YES; // To allow macOS desktop prompts
+-
+-    // dispatch semaphores used to wait for the completion handler to update and return status
+-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC)); // 1 second timeout
+-
+-    // Asynchronous call to openURL
+-    dispatch_retain(semaphore);
+-    [[NSWorkspace sharedWorkspace] openURLs:urls
+-                                    withApplicationAtURL:appURI
+-                                    configuration:configuration
+-                                    completionHandler:^(NSRunningApplication *app, NSError *error) {
+-        if (error) {
+-            status = (OSStatus) error.code;
+-        }
+-        dispatch_semaphore_signal(semaphore);
+-        dispatch_release(semaphore);
+-    }];
+-
+-    dispatch_semaphore_wait(semaphore, timeout);
+-    dispatch_release(semaphore);
++    status = openURLWithApp(urlToOpen, appURI, NO);
+ 
+ JNI_COCOA_EXIT(env);
+     return status;
+@@ -97,7 +115,7 @@ JNI_COCOA_EXIT(env);
+ JNIEXPORT jint JNICALL Java_sun_lwawt_macosx_CDesktopPeer__1lsOpenFile
+ (JNIEnv *env, jclass clz, jstring jpath, jint action, jstring jtmpTxtPath)
+ {
+-    __block OSStatus status = noErr;
++    OSStatus status = noErr;
+ JNI_COCOA_ENTER(env);
+ 
+     NSString *path  = NormalizedPathNSStringFromJavaString(env, jpath);
+@@ -111,12 +129,6 @@ JNI_COCOA_ENTER(env);
+     NSURL *appURI = [workspace URLForApplicationToOpenURL:urlToOpen];
+     NSURL *defaultTerminalApp = [workspace URLForApplicationToOpenURL:[NSURL URLWithString:@"file:///bin/sh"]];
+ 
+-    // Prepare NSOpenConfig object
+-    NSArray<NSURL *> *urls = @[urlToOpen];
+-    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+-    configuration.activates = YES; // To bring app to foreground
+-    configuration.promptsUserIfNeeded = YES;  // To allow macOS desktop prompts
+-
+     // pre-checks for open/print/edit before calling openURLs API
+     if (action == sun_lwawt_macosx_CDesktopPeer_OPEN
+             || action == sun_lwawt_macosx_CDesktopPeer_PRINT) {
+@@ -126,10 +138,6 @@ JNI_COCOA_ENTER(env);
+             [urlToOpen release];
+             return -1;
+         }
+-        // Additionally set forPrinting=TRUE for print
+-        if (action == sun_lwawt_macosx_CDesktopPeer_PRINT) {
+-            configuration.forPrinting = YES;
+-        }
+     } else if (action == sun_lwawt_macosx_CDesktopPeer_EDIT) {
+         if (appURI == nil
+             || [[urlToOpen absoluteString] containsString:[appURI absoluteString]]) {
+@@ -144,25 +152,7 @@ JNI_COCOA_ENTER(env);
+         }
+     }
+ 
+-    // dispatch semaphores used to wait for the completion handler to update and return status
+-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC)); // 1 second timeout
+-
+-    // Asynchronous call - openURLs:withApplicationAtURL
+-    dispatch_retain(semaphore);
+-    [[NSWorkspace sharedWorkspace] openURLs:urls
+-                                   withApplicationAtURL:appURI
+-                                   configuration:configuration
+-                                   completionHandler:^(NSRunningApplication *app, NSError *error) {
+-        if (error) {
+-            status = (OSStatus) error.code;
+-        }
+-        dispatch_semaphore_signal(semaphore);
+-        dispatch_release(semaphore);
+-    }];
+-
+-    dispatch_semaphore_wait(semaphore, timeout);
+-    dispatch_release(semaphore);
++    status = openURLWithApp(urlToOpen, appURI, action == sun_lwawt_macosx_CDesktopPeer_PRINT);
+ 
+     [urlToOpen release];
+ JNI_COCOA_EXIT(env);

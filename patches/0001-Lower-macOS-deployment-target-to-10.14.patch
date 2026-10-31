@@ -1,0 +1,18 @@
+Lower macOS deployment target to 10.14
+---
+ make/autoconf/flags.m4 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/make/autoconf/flags.m4 b/make/autoconf/flags.m4
+index d50538108..2f12a2227 100644
+--- a/make/autoconf/flags.m4
++++ b/make/autoconf/flags.m4
+@@ -133,7 +133,7 @@ AC_DEFUN([FLAGS_SETUP_MACOSX_VERSION],
+     # of the OS. It currently has a hard coded value. Setting this also limits
+     # exposure to API changes in header files. Bumping this is likely to
+     # require code changes to build.
+-    MACOSX_VERSION_MIN=11.00.00
++    MACOSX_VERSION_MIN=10.14.00
+     MACOSX_VERSION_MIN_NODOTS=${MACOSX_VERSION_MIN//\./}
+ 
+     AC_SUBST(MACOSX_VERSION_MIN)

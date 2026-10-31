@@ -1,0 +1,67 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: openjdk/jdk25u build tag (jdk-25.0.X+N, not -ga)
+        default: jdk-25.0.5+8
+
+jobs:
+  build:
+    # Mojave only runs on Intel Macs, so build natively for x86_64
+    runs-on: macos-15-intel
+    env:
+      JDK_TAG: ${{ inputs.tag || 'jdk-25.0.5+8' }}
+      MACOSX_MIN: '10.14'
+      BUILD_DIR: jdk/build/macosx-x86_64-server-release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch OpenJDK
+        run: git clone --depth 1 --branch "$JDK_TAG" https://github.com/openjdk/jdk25u.git jdk
+
+      - name: Apply patches
+        run: git -C jdk apply --verbose "$PWD"/patches/*.patch
+
+      - name: Install autoconf
+        run: brew install autoconf
+
+      - name: Configure
+        working-directory: jdk
+        run: >
+          bash configure
+          --with-boot-jdk="$JAVA_HOME_25_X64"
+          --with-xcode-path=/Applications/Xcode_16.4.app
+          --with-version-build="${JDK_TAG##*+}"
+          --with-version-pre="$(sed -n 's/^DEFAULT_PROMOTED_VERSION_PRE=//p' make/conf/version-numbers.conf)"
+          --without-version-opt
+
+      - name: Build
+        working-directory: jdk
+        run: make product-bundles
+
+      - name: Verify minimum macOS version
+        run: |
+          find "$BUILD_DIR/images/jdk" -type f | while read -r f; do
+            if file -b "$f" | grep -q Mach-O; then
+              echo "$(otool -l "$f" | awk '$1 == "minos" { print $2; exit }') $f"
+            fi
+          done | tee "$RUNNER_TEMP/minos.txt"
+          grep -q 'libawt_lwawt.dylib$' "$RUNNER_TEMP/minos.txt"
+          if grep -v "^$MACOSX_MIN " "$RUNNER_TEMP/minos.txt"; then
+            echo "::error::Binaries above with a minimum macOS version other than $MACOSX_MIN"
+            exit 1
+          fi
+
+      - name: Smoke test
+        run: |
+          echo 'void main() { IO.println(java.awt.Toolkit.getDefaultToolkit().getScreenSize()); }' > "$RUNNER_TEMP/Smoke.java"
+          "$BUILD_DIR/images/jdk/bin/java" -version
+          "$BUILD_DIR/images/jdk/bin/java" "$RUNNER_TEMP/Smoke.java"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.JDK_TAG }}-macos-x64
+          path: ${{ env.BUILD_DIR }}/bundles/*.tar.gz
