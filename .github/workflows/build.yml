@@ -3,25 +3,30 @@ name: Build
 on:
   push:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: openjdk/jdk25u build tag (jdk-25.0.X+N, not -ga)
-        default: jdk-25.0.5+8
 
 jobs:
   build:
     # Mojave only runs on Intel Macs, so build natively for x86_64
     runs-on: macos-15-intel
     env:
-      JDK_TAG: ${{ inputs.tag || 'jdk-25.0.5+8' }}
       MACOSX_MIN: '10.14'
       BUILD_DIR: jdk/build/macosx-x86_64-server-release
       INSTALL_DIR: /Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk
     steps:
       - uses: actions/checkout@v7
 
-      - name: Fetch OpenJDK
-        run: git clone --depth 1 --branch "$JDK_TAG" https://github.com/openjdk/jdk25u.git jdk
+      - name: Fetch latest Microsoft OpenJDK release branch
+        run: |
+          repo=https://github.com/microsoft/openjdk-jdk25u.git
+          # Zero-pad the version and build number so a plain sort orders release/jdk-<version>_<build> numerically
+          branch=$(git ls-remote --heads "$repo" \
+            | grep -Eo 'release/jdk-[0-9.]+_[0-9]+$' \
+            | awk -F'[-_]' '{ split($2, v, "."); printf "%05d%05d%05d%05d%05d%05d %s\n", v[1], v[2], v[3], v[4], v[5], $3, $0 }' \
+            | sort | tail -n 1 | cut -d' ' -f2)
+          echo "Building $branch"
+          git clone --depth 1 --branch "$branch" "$repo" jdk
+          version=${branch#release/jdk-}
+          echo "JDK_VERSION=${version/_/+}" >> "$GITHUB_ENV"
 
       - name: Apply patches
         run: git -C jdk apply --verbose "$PWD"/patches/*.patch
@@ -35,7 +40,7 @@ jobs:
           bash configure
           --with-boot-jdk="$JAVA_HOME_25_X64"
           --with-xcode-path=/Applications/Xcode_16.4.app
-          --with-version-build="${JDK_TAG##*+}"
+          --with-version-build="${JDK_VERSION##*+}"
           --with-version-pre="$(sed -n 's/^DEFAULT_PROMOTED_VERSION_PRE=//p' make/conf/version-numbers.conf)"
           --without-version-opt
 
@@ -69,8 +74,8 @@ jobs:
           mkdir "$RUNNER_TEMP/installer"
           pkgbuild --root "$RUNNER_TEMP/pkgroot" --component-plist "$RUNNER_TEMP/component.plist" \
             --install-location "$(dirname "$INSTALL_DIR")" \
-            --identifier io.github.lunaynx.openjdk-mojave-25 --version "${JDK_TAG#jdk-}" \
-            "$RUNNER_TEMP/installer/openjdk-mojave-${JDK_TAG#jdk-}.pkg"
+            --identifier io.github.lunaynx.openjdk-mojave-25 --version "$JDK_VERSION" \
+            "$RUNNER_TEMP/installer/openjdk-mojave-$JDK_VERSION.pkg"
 
       - name: Install
         run: |
@@ -85,10 +90,10 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.JDK_TAG }}-macos-x64
+          name: jdk-${{ env.JDK_VERSION }}-macos-x64
           path: ${{ env.BUILD_DIR }}/bundles/*.tar.gz
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.JDK_TAG }}-macos-x64-installer
+          name: jdk-${{ env.JDK_VERSION }}-macos-x64-installer
           path: ${{ runner.temp }}/installer/*.pkg

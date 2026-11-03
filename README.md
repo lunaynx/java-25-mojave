@@ -1,8 +1,11 @@
 # OpenJDK 25 for macOS Mojave
 
-GitHub Actions build of OpenJDK 25 (from [openjdk/jdk25u](https://github.com/openjdk/jdk25u))
-for macOS x64 with a minimum supported OS version of macOS 10.14 Mojave, including AWT and
-all other native libraries.
+GitHub Actions build of OpenJDK 25 for macOS x64 with a minimum supported OS version of
+macOS 10.14 Mojave, including AWT and all other native libraries.
+
+It's built from the latest `release/jdk-<version>_<build>` branch of
+[microsoft/openjdk-jdk25u](https://github.com/microsoft/openjdk-jdk25u), the source of the
+Microsoft Build of OpenJDK. This is not an official Microsoft build.
 
 Upstream has hard-coded the minimum to macOS 11 since JDK 22 (JDK-8317970), which is why every
 distribution ships binaries with `minos 11.0`.
@@ -22,8 +25,8 @@ The build keeps `-Werror`, so any other use of an API newer than 10.14 without a
 
 ## Building
 
-Runs on every push, or manually via *Actions → Build → Run workflow* with a different
-`jdk-25.0.X+N` tag (use the `+N` build tag that the `-ga` tag points at, not `-ga` itself).
+Runs on every push, or manually via *Actions → Build → Run workflow*. Each run picks the
+newest release branch at that point.
 
 The workflow builds on `macos-15-intel` with Xcode 16.4, fails if any Mach-O file in the image has
 a minimum OS version other than 10.14, builds an installer, installs it on the runner,
@@ -43,5 +46,5 @@ sudo rm -rf /Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk
 sudo pkgutil --forget io.github.lunaynx.openjdk-mojave-25
 ```
 
-To update to a new 25u release, change the default tag in `.github/workflows/build.yml`; if a
-patch no longer applies, rebase it on the new tag.
+If a patch stops applying to a new release branch, the *Apply patches* step fails; rebase the
+patch on that branch.
