@@ -3,30 +3,63 @@ name: Build
 on:
   push:
   workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+
+env:
+  JDK_REPO: https://github.com/microsoft/openjdk-jdk25u.git
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      branch: ${{ steps.latest.outputs.branch }}
+      version: ${{ steps.latest.outputs.version }}
+      build: ${{ steps.latest.outputs.build }}
+    steps:
+      - name: Find latest Microsoft OpenJDK release branch
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Zero-pad the version and build number so a plain sort orders release/jdk-<version>_<build> numerically
+          branch=$(git ls-remote --heads "$JDK_REPO" \
+            | grep -Eo 'release/jdk-[0-9.]+_[0-9]+$' \
+            | awk -F'[-_]' '{ split($2, v, "."); printf "%05d%05d%05d%05d%05d%05d %s\n", v[1], v[2], v[3], v[4], v[5], $3, $0 }' \
+            | sort | tail -n 1 | cut -d' ' -f2)
+          version=${branch#release/jdk-}
+          version=${version/_/+}
+          echo "Latest is $branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Scheduled runs skip versions that already have an installer artifact (the last upload of a successful build)
+          built=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=jdk-${version/+/%2B}-macos-x64-installer" \
+            --jq '[.artifacts[] | select(.expired | not)] | length')
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$built" -gt 0 ]; then
+            echo "Already built, skipping"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     # Mojave only runs on Intel Macs, so build natively for x86_64
     runs-on: macos-15-intel
     env:
+      JDK_BRANCH: ${{ needs.check.outputs.branch }}
+      JDK_VERSION: ${{ needs.check.outputs.version }}
       MACOSX_MIN: '10.14'
       BUILD_DIR: jdk/build/macosx-x86_64-server-release
       INSTALL_DIR: /Library/Java/JavaVirtualMachines/openjdk-mojave-25.jdk
     steps:
       - uses: actions/checkout@v7
 
-      - name: Fetch latest Microsoft OpenJDK release branch
-        run: |
-          repo=https://github.com/microsoft/openjdk-jdk25u.git
-          # Zero-pad the version and build number so a plain sort orders release/jdk-<version>_<build> numerically
-          branch=$(git ls-remote --heads "$repo" \
-            | grep -Eo 'release/jdk-[0-9.]+_[0-9]+$' \
-            | awk -F'[-_]' '{ split($2, v, "."); printf "%05d%05d%05d%05d%05d%05d %s\n", v[1], v[2], v[3], v[4], v[5], $3, $0 }' \
-            | sort | tail -n 1 | cut -d' ' -f2)
-          echo "Building $branch"
-          git clone --depth 1 --branch "$branch" "$repo" jdk
-          version=${branch#release/jdk-}
-          echo "JDK_VERSION=${version/_/+}" >> "$GITHUB_ENV"
+      - name: Fetch OpenJDK
+        run: git clone --depth 1 --branch "$JDK_BRANCH" "$JDK_REPO" jdk
 
       - name: Apply patches
         run: git -C jdk apply --verbose "$PWD"/patches/*.patch

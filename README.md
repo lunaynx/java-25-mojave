@@ -26,7 +26,9 @@ The build keeps `-Werror`, so any other use of an API newer than 10.14 without a
 ## Building
 
 Runs on every push, or manually via *Actions → Build → Run workflow*. Each run picks the
-newest release branch at that point.
+newest release branch at that point. A daily scheduled run builds it only if no successful
+build of that version exists yet, judged by whether its installer artifact still exists (they
+expire after 90 days, after which it builds once more).
 
 The workflow builds on `macos-15-intel` with Xcode 16.4, fails if any Mach-O file in the image has
 a minimum OS version other than 10.14, builds an installer, installs it on the runner,
